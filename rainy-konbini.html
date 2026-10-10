@@ -31,6 +31,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 /* =========================================================
    基礎設定
@@ -222,7 +223,7 @@ function lightCone(x, y, z, r, h, color, k = 0.12) {
       void main(){ vH = position.y/uH + 0.5; vec4 mv = modelViewMatrix*vec4(position,1.);
       vN = normalize(normalMatrix*normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }`,
     fragmentShader: `uniform vec3 uC; uniform float uK; varying float vH; varying vec3 vN; varying vec3 vV;
-      void main(){ float f = abs(dot(normalize(vN), normalize(vV))); float a = pow(vH, 1.6)*uK*f*f*(0.3+0.7*smoothstep(0.0,0.25,vH));
+      void main(){ float f = abs(dot(normalize(vN), normalize(vV))); float h = clamp(vH, 0.0, 1.0); float a = pow(h, 1.6)*uK*f*f*(0.3+0.7*smoothstep(0.0,0.25,h));
       gl_FragColor = vec4(uC*a, 1.0); }`,
     transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
   });
@@ -1385,6 +1386,18 @@ const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(W(), H
 composer.setPixelRatio(renderer.getPixelRatio());
 composer.setSize(W(), H());
 composer.addPass(new RenderPass(scene, camera));
+// 防護：清除 NaN / Inf 像素，避免 bloom 把它擴散成黑色方塊
+composer.addPass(new ShaderPass({
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+    void main(){
+      vec4 c = texture2D(tDiffuse, vUv);
+      bool bad = !(c.r == c.r) || !(c.g == c.g) || !(c.b == c.b) || !(c.a == c.a)
+              || c.r > 6e4 || c.g > 6e4 || c.b > 6e4 || c.r < 0.0 || c.g < 0.0 || c.b < 0.0;
+      gl_FragColor = bad ? vec4(0.0, 0.0, 0.0, 1.0) : vec4(min(c.rgb, vec3(16.0)), 1.0);
+    }`
+}));
 const bloom = new UnrealBloomPass(new THREE.Vector2(W(), H()), 0.5, 0.4, 0.98);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
